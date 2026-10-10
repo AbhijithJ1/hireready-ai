@@ -82,33 +82,40 @@ export function buildHireReadyStartPrompt(
   profile: CandidateProfile,
   config: InterviewConfig
 ): string {
-  const difficultyGuide = {
+  const difficultyGuide: Record<string, string> = {
     easy: "Ask foundational, straightforward questions. Be encouraging and patient.",
     medium: "Ask moderately challenging questions with some probing follow-ups.",
     hard: "Ask deep, nuanced questions that test critical thinking and advanced experience.",
   };
 
-  const categoryGuide = {
+  const categoryGuide: Record<string, string> = {
     behavioral: "Focus exclusively on behavioral questions using STAR methodology (Tell me about a time when...)",
     technical: "Focus on technical knowledge, problem-solving, and domain-specific competencies relevant to the role",
     hr: "Focus on HR/culture fit questions: motivation, teamwork, conflict resolution, career goals, salary expectations",
     mixed: "Mix behavioral (40%), technical (30%), and HR/culture fit (30%) questions",
   };
 
+  const candidateSkills = Array.isArray(profile?.keySkills)
+    ? profile.keySkills.filter(Boolean).join(", ")
+    : (typeof profile?.keySkills === "string" ? profile.keySkills : "Communication, Problem Solving");
+
+  const diffText = (config?.difficulty && difficultyGuide[config.difficulty]) || "Ask balanced questions with follow-ups.";
+  const catText = (config?.category && categoryGuide[config.category]) || "Mixed questions";
+
   return `You are HireReady AI, a professional and friendly mock HR interview coach.
 
 ## Candidate Profile
-- Name: ${profile.name}
-- Experience Level: ${profile.experienceLevel} (${profile.yearsOfExperience} years)
-- Target Role: ${profile.targetRole}
-- Industry: ${profile.industry}
-- Key Skills: ${profile.keySkills.join(", ")}
+- Name: ${profile?.name || "Candidate"}
+- Experience Level: ${profile?.experienceLevel || "Mid"} (${profile?.yearsOfExperience ?? 0} years)
+- Target Role: ${profile?.targetRole || "Software Professional"}
+- Industry: ${profile?.industry || "Technology"}
+- Key Skills: ${candidateSkills || "Problem Solving, Communication"}
 
 ## Interview Configuration
-- Difficulty: ${config.difficulty} — ${difficultyGuide[config.difficulty]}
-- Category: ${config.category} — ${categoryGuide[config.category]}
-- Total Questions: ${config.numberOfQuestions}
-- Job Description: ${config.jobDescription}
+- Difficulty: ${config?.difficulty || "medium"} — ${diffText}
+- Category: ${config?.category || "mixed"} — ${catText}
+- Total Questions: ${config?.numberOfQuestions || 5}
+- Job Description: ${config?.jobDescription || "Not provided"}
 
 ## Your Instructions
 1. Greet the candidate by name warmly and professionally
@@ -193,7 +200,7 @@ export function buildPerformanceReportPrompt(
 - Experience: ${profile.experienceLevel} (${profile.yearsOfExperience} years)
 - Target Role: ${profile.targetRole}
 - Industry: ${profile.industry}
-- Skills: ${profile.keySkills.join(", ")}
+- Skills: ${Array.isArray(profile?.keySkills) ? profile.keySkills.filter(Boolean).join(", ") : (profile?.keySkills || "None specified")}
 
 ## Interview Settings
 - Difficulty: ${config.difficulty}

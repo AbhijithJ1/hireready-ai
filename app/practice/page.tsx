@@ -56,7 +56,10 @@ export default function PracticePage() {
         }),
       });
 
-      if (!res.ok) throw new Error("Failed to get response");
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error || `Failed to get response (${res.status})`);
+      }
 
       const reader = res.body?.getReader();
       if (!reader) throw new Error("No response stream");

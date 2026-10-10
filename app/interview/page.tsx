@@ -443,7 +443,10 @@ function InterviewChat({
         }),
       });
 
-      if (!res.ok) throw new Error("Failed to start interview");
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error || `Failed to start interview (${res.status})`);
+      }
 
       const text = await readStream(res);
       if (text) {
@@ -457,12 +460,13 @@ function InterviewChat({
         setMessages([aiMsg]);
         setQuestionCount(1);
       }
-    } catch {
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Sorry, I couldn't start the interview. Please check your API key and try again.";
       setMessages([
         {
           id: `ai-error-${Date.now()}`,
           role: "ai",
-          content: "Sorry, I couldn't start the interview. Please check your API key and try again.",
+          content: errorMsg,
           timestamp: Date.now(),
         },
       ]);
@@ -544,7 +548,10 @@ function InterviewChat({
         }),
       });
 
-      if (!res.ok) throw new Error("Failed to get response");
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error || `Failed to evaluate answer (${res.status})`);
+      }
 
       const text = await readStream(res);
       if (text) {
@@ -569,13 +576,14 @@ function InterviewChat({
           setQuestionCount(nextQuestionNum);
         }
       }
-    } catch {
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Sorry, something went wrong. Let's try that again.";
       setMessages([
         ...newMessages,
         {
           id: `ai-error-${Date.now()}`,
           role: "ai",
-          content: "Sorry, something went wrong. Let's try that again.",
+          content: errorMsg,
           timestamp: Date.now(),
         },
       ]);
