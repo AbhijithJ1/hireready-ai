@@ -1,6 +1,23 @@
 import { NextRequest } from "next/server";
 import { buildQuestionsPrompt, buildMockInterviewPrompt } from "@/lib/prompts";
 
+const DEFAULT_MODEL = "gemini-2.0-flash";
+const API_VERSION = "v1beta";
+const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
+
+function getModel(): string {
+  const configured = process.env.GEMINI_MODEL?.trim();
+  return configured || DEFAULT_MODEL;
+}
+
+function getApiKey(): string | null {
+  const key = process.env.GEMINI_API_KEY?.trim();
+  if (!key || key === "your_api_key_here") {
+    return null;
+  }
+  return key;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -20,15 +37,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
-
-    if (!apiKey || apiKey === "your_api_key_here") {
+    const apiKey = getApiKey();
+    if (!apiKey) {
       return new Response(
-        JSON.stringify({ error: "API key not configured. Add your Gemini API key to .env.local" }),
+        JSON.stringify({ error: "API key not configured. Add your Gemini API key to .env.local or Vercel Environment Variables." }),
         { status: 500, headers: { "Content-Type": "application/json" } }
       );
     }
 
+    const model = getModel();
     let prompt: string;
 
     if (mode === "mock") {
@@ -40,11 +57,14 @@ export async function POST(req: NextRequest) {
       prompt = buildQuestionsPrompt(jobDescription);
     }
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=${apiKey}`;
+    const endpoint = `${GEMINI_BASE_URL}/${API_VERSION}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
 
-    const response = await fetch(url, {
+    const response = await fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
@@ -55,17 +75,18 @@ export async function POST(req: NextRequest) {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      console.error("Gemini API error:", response.status, errorData);
+      const upstreamMsg = errorData?.error?.message || "Unknown error";
+      console.error(`Gemini API error [${response.status}] for model '${model}':`, upstreamMsg);
 
       let msg = `API error: ${response.status}`;
-      if (errorData?.error?.message) {
-        msg = errorData.error.message;
-      } else if (response.status === 400) {
-        msg = "Invalid request. Check your API key and try again.";
-      } else if (response.status === 403) {
-        msg = "API key invalid or quota exceeded. Check your Gemini API key.";
+      if (response.status === 404) {
+        msg = `The configured Gemini model '${model}' was not found. Please set GEMINI_MODEL to 'gemini-2.0-flash'.`;
+      } else if (response.status === 401 || response.status === 403) {
+        msg = "API key invalid or quota exceeded. Check your Gemini API key in Vercel.";
       } else if (response.status === 429) {
         msg = "Rate limit exceeded. Wait a moment and try again.";
+      } else if (upstreamMsg) {
+        msg = upstreamMsg;
       }
 
       return new Response(
@@ -74,7 +95,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Transform Gemini streaming response to our SSE format
+    // Transform Gemini streaming response to SSE format
     const encoder = new TextEncoder();
     const reader = response.body?.getReader();
     if (!reader) throw new Error("No response body");
@@ -112,7 +133,7 @@ export async function POST(req: NextRequest) {
           }
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         } catch (err) {
-          console.error("Stream transform error:", err);
+          console.error("Stream transform error:", err instanceof Error ? err.message : err);
         } finally {
           controller.close();
         }
@@ -127,7 +148,7 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (error) {
-    console.error("API route error:", error);
+    console.error("API route error:", error instanceof Error ? error.message : error);
     return new Response(
       JSON.stringify({ error: "Something went wrong. Check your API key and try again." }),
       { status: 500, headers: { "Content-Type": "application/json" } }

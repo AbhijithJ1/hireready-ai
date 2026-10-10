@@ -6,6 +6,24 @@ import {
 } from "@/lib/prompts";
 import type { CandidateProfile, InterviewConfig } from "@/lib/types";
 
+// Verified Gemini API configuration
+const DEFAULT_MODEL = "gemini-2.0-flash";
+const API_VERSION = "v1beta";
+const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
+
+function getModel(): string {
+  const configured = process.env.GEMINI_MODEL?.trim();
+  return configured || DEFAULT_MODEL;
+}
+
+function getApiKey(): string | null {
+  const key = process.env.GEMINI_API_KEY?.trim();
+  if (!key || key === "your_api_key_here") {
+    return null;
+  }
+  return key;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -25,12 +43,12 @@ export async function POST(req: NextRequest) {
       totalQuestions?: number;
     };
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey || apiKey === "your_api_key_here") {
+    const apiKey = getApiKey();
+    if (!apiKey) {
       return new Response(
         JSON.stringify({
           error:
-            "API key not configured. Add your Gemini API key to .env.local",
+            "GEMINI_API_KEY environment variable is not configured. Please add your Gemini API key in Vercel project settings or .env.local.",
         }),
         { status: 500, headers: { "Content-Type": "application/json" } }
       );
@@ -38,11 +56,12 @@ export async function POST(req: NextRequest) {
 
     if (!profile || !config) {
       return new Response(
-        JSON.stringify({ error: "Profile and config are required." }),
+        JSON.stringify({ error: "Candidate profile and interview config are required." }),
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
     }
 
+    const model = getModel();
     let prompt: string;
 
     switch (action) {
@@ -65,34 +84,36 @@ export async function POST(req: NextRequest) {
           conversationHistory || "",
           totalQuestions || config.numberOfQuestions
         );
-        // For report, we don't stream — we need the full JSON response
-        return await generateFullResponse(apiKey, prompt);
+        return await generateFullResponse(apiKey, model, prompt);
       default:
         return new Response(
-          JSON.stringify({ error: "Invalid action. Use: start, evaluate, report" }),
+          JSON.stringify({ error: "Invalid action. Expected 'start', 'evaluate', or 'report'." }),
           { status: 400, headers: { "Content-Type": "application/json" } }
         );
     }
 
     // Stream response for start and evaluate actions
-    return await generateStreamingResponse(apiKey, prompt);
+    return await generateStreamingResponse(apiKey, model, prompt);
   } catch (error) {
-    console.error("Interview API error:", error);
+    console.error("Interview API internal error:", error instanceof Error ? error.message : error);
     return new Response(
       JSON.stringify({
-        error: "Something went wrong. Check your API key and try again.",
+        error: "Something went wrong. Please check your API configuration and try again.",
       }),
       { status: 500, headers: { "Content-Type": "application/json" } }
     );
   }
 }
 
-async function generateStreamingResponse(apiKey: string, prompt: string) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=${apiKey}`;
+async function generateStreamingResponse(apiKey: string, model: string, prompt: string) {
+  const endpoint = `${GEMINI_BASE_URL}/${API_VERSION}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
 
-  const response = await fetch(url, {
+  const response = await fetch(endpoint, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": apiKey,
+    },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { maxOutputTokens: 16384 },
@@ -101,18 +122,34 @@ async function generateStreamingResponse(apiKey: string, prompt: string) {
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    console.error("Gemini API error:", response.status, errorData);
-    const msg = errorData?.error?.message || `API error: ${response.status}`;
-    return new Response(JSON.stringify({ error: msg }), {
+    const upstreamMsg = errorData?.error?.message || "Unknown error";
+    console.error(`Gemini API streaming error [${response.status}] for model '${model}':`, upstreamMsg);
+
+    let clientMsg = `Gemini API error (${response.status}): ${upstreamMsg}`;
+    if (response.status === 404) {
+      clientMsg = `The configured Gemini model '${model}' was not found. Please set GEMINI_MODEL to 'gemini-2.0-flash' or 'gemini-1.5-flash'.`;
+    } else if (response.status === 401 || response.status === 403) {
+      clientMsg = "Gemini API key is invalid or lacks necessary permissions. Please verify your GEMINI_API_KEY in Vercel.";
+    } else if (response.status === 429) {
+      clientMsg = "Gemini API rate limit exceeded. Please wait a moment and try again.";
+    }
+
+    return new Response(JSON.stringify({ error: clientMsg }), {
       status: response.status,
       headers: { "Content-Type": "application/json" },
     });
   }
 
-  const encoder = new TextEncoder();
   const reader = response.body?.getReader();
-  if (!reader) throw new Error("No response body");
+  if (!reader) {
+    console.error("Gemini streaming error: response body is null");
+    return new Response(
+      JSON.stringify({ error: "No response body received from Gemini API." }),
+      { status: 502, headers: { "Content-Type": "application/json" } }
+    );
+  }
 
+  const encoder = new TextEncoder();
   const readable = new ReadableStream({
     async start(controller) {
       const decoder = new TextDecoder();
@@ -135,21 +172,20 @@ async function generateStreamingResponse(apiKey: string, prompt: string) {
 
             try {
               const parsed = JSON.parse(data);
-              const text =
-                parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
+              const text = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
               if (text) {
                 controller.enqueue(
                   encoder.encode(`data: ${JSON.stringify({ text })}\n\n`)
                 );
               }
             } catch {
-              // skip malformed chunks
+              // skip malformed chunk
             }
           }
         }
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       } catch (err) {
-        console.error("Stream transform error:", err);
+        console.error("Stream transform error:", err instanceof Error ? err.message : err);
       } finally {
         controller.close();
       }
@@ -165,12 +201,15 @@ async function generateStreamingResponse(apiKey: string, prompt: string) {
   });
 }
 
-async function generateFullResponse(apiKey: string, prompt: string) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+async function generateFullResponse(apiKey: string, model: string, prompt: string) {
+  const endpoint = `${GEMINI_BASE_URL}/${API_VERSION}/models/${encodeURIComponent(model)}:generateContent`;
 
-  const response = await fetch(url, {
+  const response = await fetch(endpoint, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": apiKey,
+    },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { maxOutputTokens: 16384 },
@@ -179,9 +218,15 @@ async function generateFullResponse(apiKey: string, prompt: string) {
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    console.error("Gemini API error:", response.status, errorData);
-    const msg = errorData?.error?.message || `API error: ${response.status}`;
-    return new Response(JSON.stringify({ error: msg }), {
+    const upstreamMsg = errorData?.error?.message || "Unknown error";
+    console.error(`Gemini API generateContent error [${response.status}] for model '${model}':`, upstreamMsg);
+
+    let clientMsg = `Gemini API error (${response.status}): ${upstreamMsg}`;
+    if (response.status === 404) {
+      clientMsg = `The configured Gemini model '${model}' was not found. Please set GEMINI_MODEL to 'gemini-2.0-flash'.`;
+    }
+
+    return new Response(JSON.stringify({ error: clientMsg }), {
       status: response.status,
       headers: { "Content-Type": "application/json" },
     });
@@ -191,9 +236,10 @@ async function generateFullResponse(apiKey: string, prompt: string) {
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
   if (!text) {
+    console.error("Gemini API report error: missing text in response");
     return new Response(
       JSON.stringify({ error: "No response from AI model" }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
+      { status: 502, headers: { "Content-Type": "application/json" } }
     );
   }
 
@@ -215,7 +261,6 @@ async function generateFullResponse(apiKey: string, prompt: string) {
       headers: { "Content-Type": "application/json" },
     });
   } catch {
-    // If JSON parsing fails, return raw text for the client to handle
     return new Response(JSON.stringify({ rawText: cleanText }), {
       headers: { "Content-Type": "application/json" },
     });
