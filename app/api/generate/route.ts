@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { buildQuestionsPrompt, buildMockInterviewPrompt } from "@/lib/prompts";
 
-const DEFAULT_MODEL = "gemini-2.0-flash";
+const DEFAULT_MODEL = "gemini-3.8-flash";
 const API_VERSION = "v1beta";
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 
@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
 
       let msg = `API error: ${response.status}`;
       if (response.status === 404) {
-        msg = `The configured Gemini model '${model}' was not found. Please set GEMINI_MODEL to 'gemini-2.0-flash'.`;
+        msg = `The configured Gemini model '${model}' was not found. Please set GEMINI_MODEL to 'gemini-3.8-flash'.`;
       } else if (response.status === 401 || response.status === 403) {
         msg = "API key invalid or quota exceeded. Check your Gemini API key in Vercel.";
       } else if (response.status === 429) {

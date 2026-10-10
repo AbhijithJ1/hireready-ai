@@ -7,7 +7,7 @@ import {
 import type { CandidateProfile, InterviewConfig } from "@/lib/types";
 
 // Verified Gemini API configuration
-const DEFAULT_MODEL = "gemini-2.0-flash";
+const DEFAULT_MODEL = "gemini-3.8-flash";
 const API_VERSION = "v1beta";
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 
@@ -127,7 +127,7 @@ async function generateStreamingResponse(apiKey: string, model: string, prompt: 
 
     let clientMsg = `Gemini API error (${response.status}): ${upstreamMsg}`;
     if (response.status === 404) {
-      clientMsg = `The configured Gemini model '${model}' was not found. Please set GEMINI_MODEL to 'gemini-2.0-flash' or 'gemini-1.5-flash'.`;
+      clientMsg = `The configured Gemini model '${model}' was not found. Please set GEMINI_MODEL to 'gemini-3.8-flash' or 'gemini-1.5-flash'.`;
     } else if (response.status === 401 || response.status === 403) {
       clientMsg = "Gemini API key is invalid or lacks necessary permissions. Please verify your GEMINI_API_KEY in Vercel.";
     } else if (response.status === 429) {
@@ -223,7 +223,7 @@ async function generateFullResponse(apiKey: string, model: string, prompt: strin
 
     let clientMsg = `Gemini API error (${response.status}): ${upstreamMsg}`;
     if (response.status === 404) {
-      clientMsg = `The configured Gemini model '${model}' was not found. Please set GEMINI_MODEL to 'gemini-2.0-flash'.`;
+      clientMsg = `The configured Gemini model '${model}' was not found. Please set GEMINI_MODEL to 'gemini-3.8-flash'.`;
     }
 
     return new Response(JSON.stringify({ error: clientMsg }), {
